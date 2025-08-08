@@ -1,0 +1,503 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>3D FPS Арена</title>
+  <style>
+    html, body { height: 100%; margin: 0; overflow: hidden; background: #0b0e13; font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, 'Helvetica Neue', Arial, 'Apple Color Emoji', 'Segoe UI Emoji'; }
+    #ui { position: fixed; inset: 0; color: #e6edf3; z-index: 10; }
+    #hud { position: absolute; top: 12px; left: 12px; background: rgba(0,0,0,.45); border: 1px solid rgba(255,255,255,.08); border-radius: 10px; padding: 10px 12px; backdrop-filter: blur(4px); box-shadow: 0 8px 24px rgba(0,0,0,.35); }
+    #hud b { color: #7ee787; }
+    #crosshair { position: absolute; top: 50%; left: 50%; width: 14px; height: 14px; transform: translate(-50%, -50%); pointer-events: none; }
+    #crosshair:before, #crosshair:after { content: ""; position: absolute; background: #e6edf3; opacity: .85; }
+    #crosshair:before { left: 6px; top: 0; width: 2px; height: 14px; border-radius: 1px; }
+    #crosshair:after { top: 6px; left: 0; height: 2px; width: 14px; border-radius: 1px; }
+
+    #start { position: absolute; inset: 0; display: grid; place-items: center; background: radial-gradient(1200px 600px at 50% -20%, rgba(100,180,255,.15), transparent), linear-gradient(180deg, rgba(255,255,255,.05), rgba(255,255,255,0) 40%); text-align: center; z-index: 20; pointer-events: auto; }
+    #start .panel { pointer-events: auto; background: rgba(2,6,12,.78); padding: 22px 26px; border-radius: 16px; border: 1px solid rgba(255,255,255,.08); box-shadow: 0 20px 60px rgba(0,0,0,.55); max-width: 520px; }
+    #start h1 { margin: 0 0 10px; font-size: 28px; letter-spacing: .5px; }
+    #start p { margin: 6px 0; opacity: .9; }
+    #start button { cursor: pointer; padding: 10px 16px; border-radius: 12px; border: 1px solid rgba(255,255,255,.15); background: linear-gradient(180deg, #2a6df0, #1744a7); color: white; font-weight: 700; margin-top: 12px; box-shadow: 0 10px 24px rgba(24,82,218,.45); }
+
+    #gameover { position: absolute; inset: 0; display: none; place-items: center; background: rgba(0,0,0,.6); text-align: center; z-index: 30; pointer-events: auto; }
+    #gameover .panel { pointer-events: auto; background: rgba(12, 16, 22, .92); padding: 22px 26px; border-radius: 16px; border: 1px solid rgba(255,255,255,.08); box-shadow: 0 20px 60px rgba(0,0,0,.55); }
+    #gameover h2 { margin: 0 0 8px; font-size: 24px; }
+    #gameover p { margin: 8px 0 16px; }
+    #gameover button { cursor: pointer; padding: 9px 14px; border-radius: 10px; border: 1px solid rgba(255,255,255,.15); background: linear-gradient(180deg, #30a46c, #18794e); color: white; font-weight: 700; }
+    a.link { color: #7aa2ff; text-decoration: none; }
+  </style>
+  <link rel="icon" href="data:," />
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.158.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.158.0/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <div id="ui">
+    <div id="hud">Жизни: <b id="lives">3</b> &nbsp;|&nbsp; Очки: <b id="score">0</b></div>
+    <div id="crosshair" hidden></div>
+
+    <div id="start">
+      <div class="panel">
+        <h1>3D FPS Арена</h1>
+        <p>Управление: <b>W/A/S/D</b> — движение, <b>мышь</b> — смотреть, <b>ЛКМ</b> — выстрел.</p>
+        <p>Цель: отстреливайтесь от врагов в замкнутой арене с укрытиями. За каждого — <b>+10 очков</b>. Колбы с сердцами пополняют жизни.</p>
+        <button id="startBtn">Играть</button>
+        <p style="font-size: 12px; opacity: .75;">Совет: если курсор не пропадает, кликните по экрану для захвата мыши.</p>
+      </div>
+    </div>
+
+    <div id="gameover">
+      <div class="panel">
+        <h2>Игра окончена</h2>
+        <p>Ваш счёт: <b id="finalScore">0</b></p>
+        <button id="restartBtn">Заново</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
+
+    // === СЦЕНА/КАМЕРА/РЕНДЕР ===
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x142033);
+
+    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 500);
+    camera.position.set(0, 1.7, 0);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.shadowMap.enabled = true;
+    renderer.toneMappingExposure = 2.0;
+    document.body.appendChild(renderer.domElement);
+    // гарантируем, что канвас всегда под интерфейсом
+    Object.assign(renderer.domElement.style, { position: 'fixed', inset: '0', display: 'block', zIndex: '0' });
+
+    // === ОСВЕЩЕНИЕ ===
+    const hemi = new THREE.HemisphereLight(0xdff1ff, 0x202a36, 1.0);
+    scene.add(hemi);
+    const dir = new THREE.DirectionalLight(0xffffff, 2.2);
+    dir.position.set(20, 30, 10);
+    dir.castShadow = true;
+    dir.shadow.mapSize.set(2048, 2048);
+    scene.add(dir);
+    const amb = new THREE.AmbientLight(0xffffff, 0.15);
+    scene.add(amb);
+
+    // === АРЕНА ===
+    const ARENA_SIZE = 80; // половина стороны = 40
+    const HALF = ARENA_SIZE / 2;
+
+    // Пол
+    const floorGeo = new THREE.PlaneGeometry(ARENA_SIZE, ARENA_SIZE, 1, 1);
+    const floorMat = new THREE.MeshStandardMaterial({ color: 0x496489, roughness: 0.85, metalness: 0.1 });
+    const floor = new THREE.Mesh(floorGeo, floorMat);
+    floor.rotation.x = -Math.PI / 2;
+    floor.receiveShadow = true;
+    scene.add(floor);
+
+    // Небольшой туман для объёма
+    scene.fog = new THREE.FogExp2(0x243b63, 0.005);
+
+    const obstacles = [];
+
+    // Стены
+    const walls = [];
+    const wallMat = new THREE.MeshStandardMaterial({ color: 0x5a7fc6, roughness: 0.6 });
+    function addWall(x, z, w, h, d) {
+      const geo = new THREE.BoxGeometry(w, h, d);
+      const mesh = new THREE.Mesh(geo, wallMat);
+      mesh.position.set(x, h/2, z);
+      mesh.castShadow = true; mesh.receiveShadow = true;
+      scene.add(mesh);
+      walls.push(mesh);
+      obstacles.push(mesh);
+      return mesh;
+    }
+    const WALL_H = 6, WALL_T = 1;
+    addWall(0, -HALF+WALL_T/2, ARENA_SIZE, WALL_H, WALL_T); // север
+    addWall(0, HALF-WALL_T/2, ARENA_SIZE, WALL_H, WALL_T);  // юг
+    addWall(-HALF+WALL_T/2, 0, WALL_T, WALL_H, ARENA_SIZE); // запад
+    addWall(HALF-WALL_T/2, 0, WALL_T, WALL_H, ARENA_SIZE);  // восток
+
+    // Укрытия (ящики/колонны)
+    const coverMat = new THREE.MeshStandardMaterial({ color: 0x6aa8ff, roughness: 0.7, metalness: 0.12 });
+    function addBox(x, z, w=3, h=2, d=3) {
+      const geo = new THREE.BoxGeometry(w, h, d);
+      const m = new THREE.Mesh(geo, coverMat);
+      m.position.set(x, h/2, z);
+      m.castShadow = true; m.receiveShadow = true;
+      scene.add(m);
+      obstacles.push(m);
+      return m;
+    }
+    // Расставим несколько укрытий случайно (но стабильно при старте)
+    const rand = (seed => () => (seed = (seed * 1664525 + 1013904223) % 4294967296) / 4294967296)(1337);
+    for (let i = 0; i < 12; i++) {
+      const x = (rand()*2-1) * (HALF-8);
+      const z = (rand()*2-1) * (HALF-8);
+      if (Math.hypot(x, z) < 12) { i--; continue; } // не в центре
+      addBox(x, z, 2 + Math.floor(rand()*3), 1.8 + Math.floor(rand()*3), 2 + Math.floor(rand()*3));
+    }
+
+    // Построим AABB для препятствий (стены и укрытия)
+    const obstacleBoxes = [];
+    function rebuildObstacleBoxes(){
+      obstacleBoxes.length = 0;
+      for (const m of obstacles){
+        const b = new THREE.Box3().setFromObject(m);
+        obstacleBoxes.push(b);
+      }
+    }
+    rebuildObstacleBoxes();
+
+    // Простая коллизия «окружность против прямоугольника» в плоскости XZ
+    function resolveCollisionsXZ(pos, radius){
+      for (const b of obstacleBoxes){
+        const exMinX = b.min.x - radius;
+        const exMaxX = b.max.x + radius;
+        const exMinZ = b.min.z - radius;
+        const exMaxZ = b.max.z + radius;
+        if (pos.x > exMinX && pos.x < exMaxX && pos.z > exMinZ && pos.z < exMaxZ){
+          const dx1 = exMaxX - pos.x;
+          const dx2 = pos.x - exMinX;
+          const dz1 = exMaxZ - pos.z;
+          const dz2 = pos.z - exMinZ;
+          const minDX = Math.min(dx1, dx2);
+          const minDZ = Math.min(dz1, dz2);
+          if (minDX < minDZ){
+            pos.x += (dx1 < dx2) ? dx1 : -dx2;
+          } else {
+            pos.z += (dz1 < dz2) ? dz1 : -dz2;
+          }
+        }
+      }
+    }
+
+    // === КОНТРОЛЛЕРЫ ===
+    const controls = new PointerLockControls(camera, renderer.domElement);
+    scene.add(controls.getObject());
+
+    const keys = { w:false, a:false, s:false, d:false };
+    document.addEventListener('keydown', (e)=>{ if(e.code==='KeyW')keys.w=true; if(e.code==='KeyA')keys.a=true; if(e.code==='KeyS')keys.s=true; if(e.code==='KeyD')keys.d=true; });
+    document.addEventListener('keyup',   (e)=>{ if(e.code==='KeyW')keys.w=false; if(e.code==='KeyA')keys.a=false; if(e.code==='KeyS')keys.s=false; if(e.code==='KeyD')keys.d=false; });
+
+    // === ИГРОВАЯ ЛОГИКА ===
+    let livesEl = document.getElementById('lives');
+    let scoreEl = document.getElementById('score');
+    let finalScoreEl = document.getElementById('finalScore');
+    let crosshair = document.getElementById('crosshair');
+    let startOverlay = document.getElementById('start');
+    let gameoverOverlay = document.getElementById('gameover');
+    let startBtn = document.getElementById('startBtn');
+    let restartBtn = document.getElementById('restartBtn');
+
+    function updateHud(){ livesEl.textContent = String(lives); scoreEl.textContent = String(score); }
+
+    function startGame(){
+      if (started) return;
+      started = true;
+      startOverlay.style.display = 'none';
+      crosshair.hidden = false;
+      try { controls.lock(); } catch (e) { console.warn('PointerLock lock error:', e); }
+    }
+    startBtn.addEventListener('click', startGame);
+
+    controls.addEventListener('lock', () => {
+      startOverlay.style.display = 'none';
+      crosshair.hidden = false;
+      started = true;
+    });
+    controls.addEventListener('unlock', () => {
+      if (!isGameOver) {
+        crosshair.hidden = true;
+        startOverlay.style.display = 'grid';
+      }
+    });
+
+    restartBtn.addEventListener('click', () => {
+      enemies.forEach(e => scene.remove(e)); enemies.length = 0;
+      pickups.forEach(p => scene.remove(p)); pickups.length = 0;
+      pops.forEach(p => scene.remove(p)); pops.length = 0;
+      tracers.forEach(t => scene.remove(t)); tracers.length = 0;
+      lives = 3; score = 0; isGameOver = false; started = false; updateHud();
+      gameoverOverlay.style.display = 'none';
+      controls.getObject().position.set(0, 1.7, 0);
+      velocity.set(0,0,0);
+      startOverlay.style.display = 'grid';
+    });
+
+    // Клик по канвасу повторно запрашивает Pointer Lock, если он ещё не выдан
+    renderer.domElement.addEventListener('click', () => {
+      if (started && !controls.isLocked && !isGameOver) {
+        try { controls.lock(); } catch (e) {}
+      }
+    });
+
+    let lives = 3;
+    let score = 0;
+    let isGameOver = false;
+    let started = false;
+
+    let enemies = [];
+    let pickups = [];
+
+    const enemyMat = new THREE.MeshStandardMaterial({ color: 0xff7777, roughness: 0.65, metalness: 0.12, emissive: 0x401010, emissiveIntensity: 0.55 });
+    const enemyGeo = new THREE.SphereGeometry(1.0, 16, 16);
+
+    function spawnEnemy() {
+      if (isGameOver) return;
+      // Появление вдоль границ, но не слишком близко к игроку
+      let x, z;
+      for (let tries=0; tries<20; tries++) {
+        x = (Math.random()*2-1) * (HALF-5);
+        z = (Math.random()*2-1) * (HALF-5);
+        const dist = camera.position.distanceTo(new THREE.Vector3(x, 0, z));
+        if (dist > 12) break;
+      }
+      const m = new THREE.Mesh(enemyGeo, enemyMat);
+      m.castShadow = true; m.receiveShadow = true;
+      m.position.set(x, 1.0, z);
+      m.userData = { speed: 3 + Math.random()*1.5, alive: true, radius: 1.0 };
+      scene.add(m);
+      enemies.push(m);
+    }
+
+    const heartGeo = new THREE.CapsuleGeometry(0.3, 0.6, 2, 10);
+    const heartMat = new THREE.MeshStandardMaterial({ color: 0x79f28a, emissive: 0x2a9d57, emissiveIntensity: 0.85 });
+    function spawnPickup() {
+      if (isGameOver) return;
+      let x = (Math.random()*2-1) * (HALF-6);
+      let z = (Math.random()*2-1) * (HALF-6);
+      const h = new THREE.Mesh(heartGeo, heartMat);
+      h.position.set(x, 1.0, z);
+      h.castShadow = true; h.receiveShadow = true;
+      h.userData = { type:'life', pulse: 0 };
+      scene.add(h);
+      pickups.push(h);
+    }
+
+    // === СТРЕЛЬБА (лучевой выстрел) ===
+    const raycaster = new THREE.Raycaster();
+    const tmpV = new THREE.Vector3();
+
+    function shoot() {
+      if (isGameOver || !controls.isLocked) return;
+      // Линия выстрела — из камеры вперёд
+      const dir = new THREE.Vector3(0,0,-1).applyQuaternion(camera.quaternion).normalize();
+      raycaster.set(camera.position.clone(), dir);
+
+      // Вначале проверяем, не блокируют ли укрытия выстрел (стены/ящики)
+      const blockHits = raycaster.intersectObjects(obstacles, true);
+      const firstBlock = blockHits[0];
+
+      // Затем ищем ближайшего врага по лучу
+      const hits = raycaster.intersectObjects(enemies.filter(e=>e.userData.alive), false);
+      // Трассер направления пули
+      let tracerDist = 100;
+      if (firstBlock) tracerDist = Math.min(tracerDist, firstBlock.distance);
+      if (hits.length) {
+        const enemyDist = hits[0].distance;
+        tracerDist = (!firstBlock || enemyDist < firstBlock.distance)
+          ? Math.min(tracerDist, enemyDist)
+          : Math.min(tracerDist, firstBlock.distance);
+      }
+      const tracerEnd = camera.position.clone().add(dir.clone().multiplyScalar(tracerDist));
+      spawnTracer(camera.position.clone(), tracerEnd);
+      if (hits.length) {
+        const firstEnemy = hits[0];
+        // Если есть укрытие ближе, чем враг — выстрел не проходит
+        if (!firstBlock || firstEnemy.distance < firstBlock.distance) {
+          const m = firstEnemy.object;
+          m.userData.alive = false;
+          score += 10;
+          updateHud();
+          // Небольшая вспышка/эффект
+          pop(m.position);
+          scene.remove(m);
+          enemies = enemies.filter(e => e !== m);
+        }
+      }
+    }
+
+    window.addEventListener('mousedown', (e)=>{ if (e.button === 0) shoot(); });
+
+    // Эффект хлопка при убийстве
+    const pops = [];
+    const popGeo = new THREE.SphereGeometry(0.2, 8, 8);
+    const popMat = new THREE.MeshBasicMaterial({ color: 0xffe29a });
+    function pop(position) {
+      const p = new THREE.Mesh(popGeo, popMat.clone());
+      p.position.copy(position);
+      p.userData.t = 0;
+      scene.add(p);
+      pops.push(p);
+    }
+
+    // Трассеры пуль (визуализация направления выстрела)
+    const tracers = [];
+    function spawnTracer(start, end){
+      const g = new THREE.BufferGeometry().setFromPoints([start, end]);
+      const mat = new THREE.LineBasicMaterial({ transparent: true, opacity: 1 });
+      const line = new THREE.Line(g, mat);
+      line.userData.t = 0;
+      scene.add(line);
+      tracers.push(line);
+    }
+    function updateTracers(dt){
+      for (let i = tracers.length - 1; i >= 0; i--) {
+        const l = tracers[i];
+        l.userData.t += dt;
+        l.material.opacity = Math.max(0, 1 - l.userData.t * 4);
+        if (l.userData.t > 0.4) { scene.remove(l); tracers.splice(i,1); }
+      }
+    }
+
+    // Эффект «хлопка» — апдейт
+    function updatePops(dt) {
+      for (let i = pops.length - 1; i >= 0; i--) {
+        const p = pops[i];
+        p.userData.t += dt;
+        p.scale.setScalar(1 + p.userData.t * 4);
+        p.material.opacity = 1 - p.userData.t;
+        p.material.transparent = true;
+        if (p.userData.t > 1) { scene.remove(p); pops.splice(i,1); }
+      }
+    }
+
+    // === ПАРАМЕТРЫ ДВИЖЕНИЯ/ФИЗИКИ ===
+    const SPEED = 84;
+    const PLAYER_RADIUS = 0.6;
+    const FRICTION = 8;
+    const GRAVITY = 25;
+    const velocity = new THREE.Vector3();
+    const direction = new THREE.Vector3();
+
+    function movePlayer(dt){
+      direction.set(0,0,0);
+      if (keys.w) direction.z += 1; // инвертировано: W = назад
+      if (keys.s) direction.z -= 1; // инвертировано: S = вперёд
+      if (keys.a) direction.x += 1; // инвертировано: A = вправо
+      if (keys.d) direction.x -= 1; // инвертировано: D = влево
+      if (direction.lengthSq() > 0) direction.normalize();
+
+      const forward = new THREE.Vector3();
+      camera.getWorldDirection(forward); forward.y = 0; forward.normalize();
+      const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0,1,0)).negate();
+
+      const move = new THREE.Vector3();
+      move.addScaledVector(forward, direction.z);
+      move.addScaledVector(right, direction.x);
+      if (move.lengthSq() > 0) move.normalize();
+
+      velocity.addScaledVector(move, SPEED * dt);
+      velocity.x -= velocity.x * Math.min(1, FRICTION * dt);
+      velocity.z -= velocity.z * Math.min(1, FRICTION * dt);
+
+      const obj = controls.getObject();
+      obj.position.addScaledVector(velocity, dt);
+      resolveCollisionsXZ(obj.position, PLAYER_RADIUS);
+      obj.position.x = THREE.MathUtils.clamp(obj.position.x, -HALF + 1.2, HALF - 1.2);
+      obj.position.z = THREE.MathUtils.clamp(obj.position.z, -HALF + 1.2, HALF - 1.2);
+      obj.position.y = 1.7;
+    }
+
+    // === ЛОГИКА ВРАГОВ ===
+    let hitCooldown = 0;
+    function updateEnemies(dt){
+      const playerPos = controls.getObject().position;
+      for (let i = enemies.length - 1; i >= 0; i--){
+        const m = enemies[i];
+        if (!m.userData.alive) continue;
+        const toPlayer = tmpV.copy(playerPos).sub(m.position); toPlayer.y = 0;
+        const dist = toPlayer.length();
+        if (dist > 0.0001) toPlayer.normalize();
+        m.position.addScaledVector(toPlayer, (m.userData.speed || 3) * dt);
+        m.position.y = 1.0;
+        resolveCollisionsXZ(m.position, m.userData.radius || 1.0);
+
+        if (dist < (m.userData.radius + 0.8)){
+          if (hitCooldown <= 0){
+            lives -= 1; updateHud();
+            hitCooldown = 1.0;
+            if (lives <= 0) endGame();
+          }
+          pop(m.position);
+          scene.remove(m);
+          m.userData.alive = false;
+        }
+      }
+      if (hitCooldown > 0) hitCooldown -= dt;
+    }
+
+    // === ПОДБОР ПРЕДМЕТОВ ===
+    function updatePickups(dt){
+      const playerPos = controls.getObject().position;
+      for (let i = pickups.length - 1; i >= 0; i--){
+        const h = pickups[i];
+        h.userData.pulse += dt;
+        h.rotation.y += dt * 2;
+        const s = 1 + Math.sin(h.userData.pulse * 4) * 0.08;
+        h.scale.setScalar(s);
+        if (h.position.distanceTo(playerPos) < 1.6){
+          lives += 1; updateHud();
+          scene.remove(h);
+          pickups.splice(i,1);
+        }
+      }
+    }
+
+    // === СПАВНЕРЫ ===
+    let enemySpawnAcc = 0, pickupSpawnAcc = 0, enemySpawnEvery = 1.25, pickupSpawnEvery = 8 + Math.random()*8;
+    function updateSpawners(dt){
+      enemySpawnAcc += dt; pickupSpawnAcc += dt;
+      if (enemySpawnAcc >= enemySpawnEvery){
+        enemySpawnAcc = 0; spawnEnemy();
+        enemySpawnEvery = Math.max(0.6, enemySpawnEvery * 0.995);
+      }
+      if (pickupSpawnAcc >= pickupSpawnEvery){
+        pickupSpawnAcc = 0; spawnPickup();
+        pickupSpawnEvery = 8 + Math.random()*8;
+      }
+    }
+
+    // === GAME OVER ===
+    function endGame(){
+      isGameOver = true;
+      finalScoreEl.textContent = String(score);
+      gameoverOverlay.style.display = 'grid';
+      try { controls.unlock(); } catch(e) {}
+    }
+
+    // === РЕНДЕР-ЦИКЛ ===
+    function animate() {
+      requestAnimationFrame(animate);
+      const dt = Math.min(0.033, (globalThis.__gameClock || (globalThis.__gameClock = new THREE.Clock())).getDelta());
+      if (!isGameOver && started) {
+        movePlayer(dt);
+        updateEnemies(dt);
+        updatePickups(dt);
+        updateSpawners(dt);
+      }
+      updatePops(dt);
+      updateTracers(dt);
+      renderer.render(scene, camera);
+    }
+    animate();
+
+    // === РЕЗАЙЗ ===
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+  </script>
+</body>
+</html>
